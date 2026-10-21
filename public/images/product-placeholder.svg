@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1050" role="img" aria-labelledby="title desc">
+  <title id="title">Mamigloexclusive product photo placeholder</title>
+  <desc id="desc">A simple editorial illustration of a midnight jacket and champagne tie. Replace this clearly marked placeholder with a real brand product photograph.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#292823"/><stop offset="1" stop-color="#111210"/></linearGradient>
+    <linearGradient id="cloth" x1="0" x2="1"><stop stop-color="#302f2a"/><stop offset=".5" stop-color="#191a19"/><stop offset="1" stop-color="#37352e"/></linearGradient>
+    <linearGradient id="tie" x1="0" x2="1"><stop stop-color="#a78243"/><stop offset=".5" stop-color="#dfc27e"/><stop offset="1" stop-color="#98733a"/></linearGradient>
+  </defs>
+  <rect width="900" height="1050" fill="url(#bg)"/>
+  <circle cx="700" cy="218" r="185" fill="#c6a15b" opacity=".07"/>
+  <path d="M255 104 450 186 645 104 788 228 691 351 671 898H229l-20-547-97-123z" fill="url(#cloth)" stroke="#c6a15b" stroke-opacity=".28" stroke-width="3"/>
+  <path d="m255 104 195 82-91 225-141-183zM645 104 450 186l91 225 141-183z" fill="#131412" stroke="#aaa28d" stroke-opacity=".25" stroke-width="3"/>
+  <path d="m358 184 92 36 92-36-40 146-52 64-52-64z" fill="#e7e0ce"/>
+  <path d="m414 319 36 22 36-22-22 228 48 240-62 64-62-64 48-240z" fill="url(#tie)" stroke="#e2c887" stroke-opacity=".62" stroke-width="2"/>
+  <path d="M274 444h111v14H274zm441 0H515v14h200z" fill="#c6a15b" opacity=".5"/>
+  <path d="M449 447h12v12h-12zm0 119h12v12h-12zm0 119h12v12h-12z" fill="#c6a15b" opacity=".7"/>
+  <rect x="45" y="45" width="810" height="960" fill="none" stroke="#c6a15b" stroke-opacity=".27"/>
+  <text x="450" y="950" text-anchor="middle" fill="#e9dfc9" font-family="Arial,sans-serif" font-size="18" letter-spacing="6">BUSINESS PHOTO PLACEHOLDER</text>
+  <text x="450" y="982" text-anchor="middle" fill="#ba9d66" font-family="Arial,sans-serif" font-size="10" letter-spacing="4">REPLACE WITH YOUR PRODUCT PHOTOGRAPH</text>
+</svg>

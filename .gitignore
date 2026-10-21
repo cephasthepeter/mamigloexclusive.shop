@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+api/local.settings.json
+api/.local/
+api/node_modules/
+api/dist/
+supabase/.temp/
+AzuriteConfig
+__azurite_db_table__.json
+*.tsbuildinfo
+.DS_Store

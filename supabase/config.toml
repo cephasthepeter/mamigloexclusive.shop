@@ -1,0 +1,10 @@
+project_id = "mamigloexclusive-local"
+
+[auth]
+enable_signup = true
+
+[functions.create-order]
+verify_jwt = false
+
+[functions.upload-product-image]
+verify_jwt = false

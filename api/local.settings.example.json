@@ -1,0 +1,12 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "DEMO_MODE": "true",
+    "ALLOWED_ORIGIN": "http://localhost:5173",
+    "DELIVERY_FEE_NGN": "0",
+    "ADMIN_EMAILS": "",
+    "VITE_PLACEHOLDER": "Public Vite settings belong in the repository-root .env file"
+  }
+}

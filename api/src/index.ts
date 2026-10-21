@@ -1,0 +1,7 @@
+import './functions/products.js'
+import './functions/categories.js'
+import './functions/store-config.js'
+import './functions/orders.js'
+import './functions/admin.js'
+import './functions/contact.js'
+import './functions/images.js'
