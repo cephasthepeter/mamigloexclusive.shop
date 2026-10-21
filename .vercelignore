@@ -1,0 +1,5 @@
+api/
+.azure/
+.github/
+.vscode/
+src/CustomerAccount.tsx
