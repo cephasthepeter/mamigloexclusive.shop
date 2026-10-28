@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AdminEligibilityCheckError, AdminNotAuthorizedError, getAdminEligibility, isAdminEmail, normalizeEmail, signInAdministrator, supabase } from './supabase'
-import { adminRedirectForState, pageFromPath } from './App'
+import { adminRedirectForState, checkoutValidationError, pageFromPath } from './App'
 import { storeApi } from './api'
 
 afterEach(() => vi.restoreAllMocks())
@@ -84,6 +84,51 @@ describe('admin allowlist checks', () => {
 
     await expect(storeApi.admin.products('')).rejects.toMatchObject({ status: 403 })
   })
+
+  it('blocks authenticated customers from changing payment status', async () => {
+    vi.spyOn(supabase.auth, 'getUser').mockResolvedValue({
+      data: { user: { email: 'customer@example.com' } },
+      error: null,
+    } as never)
+    vi.spyOn(supabase, 'rpc').mockResolvedValue({ data: false, error: null } as never)
+
+    await expect(storeApi.admin.updatePaymentStatus('', 'order-id', 'Paid'))
+      .rejects.toMatchObject({ status: 403 })
+  })
+
+  it('blocks authenticated customers from reviewing payments or updating shipping', async () => {
+    vi.spyOn(supabase.auth, 'getUser').mockResolvedValue({
+      data: { user: { email: 'customer@example.com' } },
+      error: null,
+    } as never)
+    vi.spyOn(supabase, 'rpc').mockResolvedValue({ data: false, error: null } as never)
+
+    await expect(storeApi.admin.reviewPayment('', 'order-id', 'confirm'))
+      .rejects.toMatchObject({ status: 403 })
+    await expect(storeApi.admin.updateShipping('', 'order-id', 'Courier', 'TRACK-1'))
+      .rejects.toMatchObject({ status: 403 })
+  })
+
+  it('submits a customer-owned OPay payment reference as pending verification only', async () => {
+    vi.spyOn(supabase.auth, 'getUser').mockResolvedValue({
+      data: { user: { id: 'customer-user-id', email: 'customer@example.com' } },
+      error: null,
+    } as never)
+    const rpc = vi.spyOn(supabase, 'rpc').mockResolvedValue({
+      data: { orderId: 'order-id', paymentStatus: 'Pending Verification', submittedAt: '2026-03-01T10:00:00.000Z', amount: 12000 },
+      error: null,
+    } as never)
+
+    await expect(storeApi.customer.submitPaymentConfirmation('order-id', ' OP-123 ', 12000))
+      .resolves.toEqual({ submittedAt: '2026-03-01T10:00:00.000Z' })
+    expect(rpc).toHaveBeenCalledWith('submit_order_payment_confirmation', {
+      p_order_id: 'order-id',
+      p_customer_user_id: 'customer-user-id',
+      p_payment_reference: 'OP-123',
+      p_payment_amount: 12000,
+      p_payment_method: 'opay_transfer',
+    })
+  })
 })
 
 describe('administrator routes', () => {
@@ -109,5 +154,40 @@ describe('administrator routes', () => {
     expect(adminRedirectForState('admin', 'customer')).toBeNull()
     expect(adminRedirectForState('admin-login', 'loading')).toBeNull()
     expect(adminRedirectForState('admin-login', 'error')).toBeNull()
+  })
+
+  it('recognizes the journal homepage and individual article routes', () => {
+    expect(pageFromPath('/journal')).toBe('journal')
+    expect(pageFromPath('/journal/choose-the-perfect-tie-for-every-occasion')).toBe('journal-article')
+    expect(pageFromPath('/journal/choose-the-perfect-tie-for-every-occasion/')).toBe('journal-article')
+  })
+})
+
+describe('checkout validation', () => {
+  const customer = {
+    fullName: 'Test Customer',
+    phone: '+234 801 234 5678',
+    email: 'customer@example.com',
+    address: '12 Test Street',
+    state: 'Lagos',
+    city: 'Ikeja',
+    deliveryMethod: 'Courier delivery',
+  }
+  const items = [{ productId: '11111111-1111-4111-8111-111111111111', quantity: 1 }]
+
+  it('accepts valid checkout details and item quantities', () => {
+    expect(checkoutValidationError(customer, items)).toBe('')
+  })
+
+  it('explains invalid phone number formats before sending the order', () => {
+    expect(checkoutValidationError({ ...customer, phone: 'call me' }, items)).toContain('phone number')
+  })
+
+  it('blocks item quantities above the server limit', () => {
+    expect(checkoutValidationError(customer, [{ ...items[0], quantity: 21 }])).toContain('between 1 and 20')
+  })
+
+  it('rejects malformed optional email addresses', () => {
+    expect(checkoutValidationError({ ...customer, email: 'not-an-email' }, items)).toContain('valid email')
   })
 })

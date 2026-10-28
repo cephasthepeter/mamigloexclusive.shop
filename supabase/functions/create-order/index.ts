@@ -35,7 +35,7 @@ Deno.serve(async (request) => {
   const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
   if (!forwardedFor) return json(503, { error: 'Checkout could not be verified. Please try again.' })
 
-  let body: { customer?: unknown; items?: unknown; idempotencyKey?: unknown }
+  let body: { customer?: unknown; items?: unknown; idempotencyKey?: unknown; paymentMethod?: unknown }
   try {
     const raw = await request.text()
     if (raw.length > 32_000) return json(413, { error: 'The order request is too large.' })
@@ -46,6 +46,9 @@ Deno.serve(async (request) => {
   if (typeof body.idempotencyKey !== 'string' ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.idempotencyKey)) {
     return json(400, { error: 'Please submit the order again.' })
+  }
+  if (body.paymentMethod !== 'opay_transfer' && body.paymentMethod !== 'cash_on_delivery') {
+    return json(400, { error: 'Choose a supported payment method.' })
   }
 
   const admin = createClient(projectUrl, serviceKey, {
@@ -67,18 +70,30 @@ Deno.serve(async (request) => {
   if (limitError) return json(503, { error: 'Checkout is temporarily unavailable. Please try again.' })
   if (!allowed) return json(429, { error: 'Too many order attempts. Please wait a minute and try again.' })
 
-  const { data, error } = await admin.rpc('create_order_with_customer', {
+  const { data, error } = await admin.rpc('create_order_with_payment_method', {
     p_customer: body.customer,
     p_items: body.items,
     p_idempotency_key: body.idempotencyKey,
     p_customer_user_id: customerUserId,
+    p_payment_method: body.paymentMethod,
   })
   if (error) {
     const status = error.code === 'P0001' ? 409 : error.code === '22023' ? 400 : 500
+    const detail = error.message.toLowerCase()
     const message = error.code === 'P0001'
-      ? 'One or more selected items are unavailable or out of stock. Review your bag and try again.'
+      ? error.message.toLowerCase().includes('payment method')
+        ? 'This order was already submitted with a different payment method. Please review your order before retrying.'
+        : 'One or more selected items are unavailable or out of stock. Review your bag and try again.'
       : error.code === '22023'
-        ? 'Please check the order details and try again.'
+        ? detail.includes('customer and delivery details')
+          ? 'Check your name, phone, delivery address, state, city and delivery method, then try again.'
+          : detail.includes('payment method')
+            ? 'Choose OPay bank transfer or cash on delivery, then try again.'
+            : detail.includes('order item') || detail.includes('item lines')
+              ? 'One or more items or quantities are invalid. Update your bag and try again.'
+              : detail.includes('colour') || detail.includes('size')
+                ? 'A selected product option is no longer available. Review your bag and try again.'
+                : 'Some checkout details are invalid. Review your customer details and bag, then try again.'
         : 'The order could not be submitted. Please try again.'
     return json(status, { error: message })
   }

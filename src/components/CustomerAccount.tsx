@@ -1,14 +1,20 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { ArrowRight, Eye, EyeOff, Home, LogOut, ShieldCheck, Sparkles } from 'lucide-react'
-import { ApiError, storeApi } from '../api'
-import { formatNGN } from '../config'
+import { ArrowRight, Eye, EyeOff, Home, ShieldCheck, Sparkles } from 'lucide-react'
+import { ApiError } from '../api'
 import { getAuthRedirectUrl, googleAuthEnabled, phoneAuthEnabled, supabase } from '../supabase'
-import type { StoreOrder } from '../types'
+import type { CustomerAddressInput, Product } from '../types'
+import { CustomerAccountDashboard } from './CustomerAccountDashboard'
 
 type AuthMode = 'sign-in' | 'sign-up'
 interface CustomerAccountProps {
   initialMode?: AuthMode
-  onNavigate?: (target: 'home' | 'login' | 'register' | 'account') => void
+  products: Product[]
+  cartItemCount: number
+  onAddToCart: (product: Product) => void
+  onNavigate?: (target: 'home' | 'shop' | 'checkout' | 'contact' | 'returns' | 'login' | 'register' | 'account') => void
+  onOpenProduct?: (product: Product) => void
+  onUseAddress?: (address: CustomerAddressInput) => void
+  onOpenCart?: () => void
 }
 
 function passwordStrength(value: string) {
@@ -25,25 +31,19 @@ function passwordStrength(value: string) {
   return { label: 'Excellent', score: 4, checks }
 }
 
-export function CustomerAccount({ initialMode = 'sign-in', onNavigate }: CustomerAccountProps) {
+export function CustomerAccount({ initialMode = 'sign-in', products, cartItemCount, onAddToCart, onNavigate, onOpenProduct, onUseAddress, onOpenCart }: CustomerAccountProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [fullName, setFullName] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
-  const [rememberMe, setRememberMe] = useState(() => {
-    if (typeof window === 'undefined') return true
-    return window.localStorage.getItem('mamiglo-remember-me') !== 'false'
-  })
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [signedInEmail, setSignedInEmail] = useState('')
-  const [orders, setOrders] = useState<StoreOrder[]>([])
   const [mode, setMode] = useState<AuthMode>(initialMode)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [loading, setLoading] = useState(false)
   const [initialising, setInitialising] = useState(true)
   const [acceptTerms, setAcceptTerms] = useState(false)
   const strength = useMemo(() => passwordStrength(password), [password])
@@ -51,12 +51,6 @@ export function CustomerAccount({ initialMode = 'sign-in', onNavigate }: Custome
   useEffect(() => {
     setMode(initialMode)
   }, [initialMode])
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('mamiglo-remember-me', String(rememberMe))
-    }
-  }, [rememberMe])
 
   useEffect(() => {
     let active = true
@@ -77,25 +71,9 @@ export function CustomerAccount({ initialMode = 'sign-in', onNavigate }: Custome
     }
   }, [])
 
-  useEffect(() => {
-    if (!signedInEmail) {
-      setOrders([])
-      return
-    }
-    let active = true
-    setLoading(true)
-    void storeApi.customer.orders()
-      .then(({ orders: result }) => { if (active) setOrders(result) })
-      .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Order history could not be loaded.')
-      })
-      .finally(() => { if (active) setLoading(false) })
-    return () => { active = false }
-  }, [signedInEmail])
-
   async function handleGoogleSignIn() {
     if (!googleAuthEnabled) {
-      setError('Google sign-in is not configured for this project. Enable Google OAuth in Supabase Auth and set VITE_ENABLE_GOOGLE_AUTH=true to enable it.')
+      setError(`Google ${mode === 'sign-up' ? 'signup' : 'sign-in'} is not configured yet. Configure the Google provider in Supabase Auth and set VITE_ENABLE_GOOGLE_AUTH=true.`)
       return
     }
 
@@ -167,7 +145,10 @@ export function CustomerAccount({ initialMode = 'sign-in', onNavigate }: Custome
           },
         })
         if (signUpError) throw signUpError
-        if (data.session) setSignedInEmail(data.user?.email || trimmedEmail)
+        if (data.session) {
+          setSignedInEmail(data.user?.email || trimmedEmail)
+          onNavigate?.('account')
+        }
         else setNotice('Check your email to confirm your account, then sign in here.')
         setPassword('')
         setConfirmPassword('')
@@ -177,6 +158,7 @@ export function CustomerAccount({ initialMode = 'sign-in', onNavigate }: Custome
         const { data, error: signInError } = await supabase.auth.signInWithPassword({ email: trimmedEmail, password })
         if (signInError) throw signInError
         setSignedInEmail(data.user.email || trimmedEmail)
+        onNavigate?.('account')
         setPassword('')
       }
     } catch (reason) {
@@ -217,21 +199,17 @@ export function CustomerAccount({ initialMode = 'sign-in', onNavigate }: Custome
 
   if (initialising) return <main className="content-page auth-page"><section className="auth-shell auth-shell--loading"><div className="auth-panel"><p className="eyebrow">CUSTOMER ACCOUNT</p><h1>Loading your account.</h1><p className="auth-copy">Checking your session securely…</p></div></section></main>
 
-  if (signedInEmail) return <main className="content-page account-page">
-    <div className="account-heading"><div><p className="eyebrow">YOUR ACCOUNT</p><h1>Welcome back.</h1><p>{signedInEmail}</p></div><button className="button button-outline" onClick={signOut}><LogOut size={15} /> Sign out</button></div>
-    <section className="account-orders"><div className="section-heading"><div><p className="eyebrow">ORDER HISTORY</p><h2>Your orders</h2></div><span>{orders.length} orders</span></div>
-      {error && <div className="error-notice" role="alert">{error}</div>}
-      {loading ? <p className="account-empty">Loading your orders…</p> : orders.length ? <div className="account-order-list">{orders.map((order) => <article className="account-order" key={order.id}>
-        <div className="account-order-top"><div><strong>{order.reference}</strong><span>{new Date(order.createdAt).toLocaleDateString()}</span></div><span className={`account-order-status status-${order.status.toLowerCase().replaceAll(' ', '-')}`}>{order.status}</span></div>
-        <div className="customer-order-items" aria-label="Items in this order">{order.lines.map((line, index) => <div className="customer-order-item" key={`${line.productId}-${index}`}>
-          <div><strong>{line.name}</strong><span>{[line.color, line.size, `Qty ${line.quantity}`].filter(Boolean).join(' · ')}</span></div>
-          <div><span>{formatNGN(line.unitPriceNGN)} each</span><strong>{formatNGN(line.unitPriceNGN * line.quantity)}</strong></div>
-        </div>)}</div>
-        <div className="customer-order-costs"><div><span>Subtotal</span><strong>{formatNGN(order.subtotalNGN)}</strong></div><div><span>Delivery</span><strong>{formatNGN(order.deliveryFeeNGN)}</strong></div></div>
-        <div className="account-order-total"><span>{order.lines.reduce((count, line) => count + line.quantity, 0)} items</span><strong>Total {formatNGN(order.totalNGN)}</strong></div>
-      </article>)}</div> : <p className="account-empty">No orders are linked to this account yet. Guest orders do not appear here.</p>}
-    </section>
-  </main>
+  if (signedInEmail) return <CustomerAccountDashboard
+    email={signedInEmail}
+    products={products}
+    cartItemCount={cartItemCount}
+    onAddToCart={onAddToCart}
+    onNavigate={(target) => onNavigate?.(target)}
+    onOpenProduct={(product) => onOpenProduct?.(product)}
+    onUseAddress={(address) => onUseAddress?.(address)}
+    onOpenCart={() => onOpenCart?.()}
+    onSignOut={signOut}
+  />
 
   return <main className="content-page auth-page">
     <section className="auth-shell">
@@ -314,7 +292,6 @@ export function CustomerAccount({ initialMode = 'sign-in', onNavigate }: Custome
 
           {mode === 'sign-in' && (
             <div className="auth-row">
-              <label className="checkbox-row"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> <span>Remember me</span></label>
               <button type="button" className="text-link text-link--inline" onClick={requestPasswordReset}>Forgot password?</button>
             </div>
           )}
@@ -335,13 +312,10 @@ export function CustomerAccount({ initialMode = 'sign-in', onNavigate }: Custome
         <div className="auth-divider"><span>OR CONTINUE WITH</span></div>
 
         <div className="auth-provider-list">
-          {googleAuthEnabled ? (
-            <button type="button" className="auth-provider" onClick={handleGoogleSignIn} disabled={busy}>
-              <Sparkles size={16} /> Continue with Google
-            </button>
-          ) : (
-            <p className="auth-provider-note">Google sign-in is not configured for this project. Enable Google OAuth in Supabase Auth and set VITE_ENABLE_GOOGLE_AUTH=true.</p>
-          )}
+          <button type="button" className="auth-provider" onClick={handleGoogleSignIn} disabled={busy}>
+            <Sparkles size={16} /> {mode === 'sign-up' ? 'Sign up with Google' : 'Continue with Google'}
+          </button>
+          {!googleAuthEnabled && <p className="auth-provider-note">Google sign-in and signup require Google OAuth credentials in Supabase Auth and VITE_ENABLE_GOOGLE_AUTH=true.</p>}
 
           {phoneAuthEnabled ? (
             <div className="phone-auth-box">

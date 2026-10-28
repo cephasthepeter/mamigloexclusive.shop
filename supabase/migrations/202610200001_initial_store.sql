@@ -456,26 +456,27 @@ begin
       else private.checkout_rate_limits.window_started_at
     end,
     request_count = case
-
-    create function public.create_order_with_customer(
-      p_customer jsonb,
-      p_items jsonb,
-      p_idempotency_key uuid,
-      p_customer_user_id uuid default null
-    )
-    returns jsonb
-    language plpgsql
-    security definer
-    set search_path = ''
-    as $$
       when private.checkout_rate_limits.window_started_at <= v_now - interval '1 minute' then 1
-      return public.create_order(p_customer, p_items, p_idempotency_key, p_customer_user_id);
-    end;
-    $$;
       else least(private.checkout_rate_limits.request_count + 1, 2147483647)
     end
   returning request_count into v_request_count;
   return v_request_count <= 5;
+end;
+$$;
+
+create function public.create_order_with_customer(
+  p_customer jsonb,
+  p_items jsonb,
+  p_idempotency_key uuid,
+  p_customer_user_id uuid default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  return public.create_order(p_customer, p_items, p_idempotency_key, p_customer_user_id);
 end;
 $$;
 

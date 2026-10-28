@@ -1,0 +1,65 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "vite: serve",
+      "type": "shell",
+      "command": "npm.cmd",
+      "args": ["run", "dev:web", "--", "--host", "127.0.0.1"],
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "VITE v.*",
+          "endsPattern": "Local:.*http://127\\.0\\.0\\.1:5173"
+        }
+      }
+    },
+    {
+      "label": "api: build",
+      "type": "shell",
+      "command": "npm.cmd",
+      "args": ["run", "build", "--workspace", "api"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": "$tsc"
+    },
+    {
+      "label": "func: host start",
+      "type": "func",
+      "command": "host start",
+      "options": {
+        "cwd": "${workspaceFolder}\\api"
+      },
+      "dependsOn": ["api: build"],
+      "dependsOrder": "sequence",
+      "isBackground": true,
+      "problemMatcher": "$func-watch"
+    },
+    {
+      "label": "emulators: up",
+      "type": "shell",
+      "command": "docker",
+      "args": ["compose", "up", "-d", "--wait", "azurite"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "emulators: down",
+      "type": "shell",
+      "command": "docker",
+      "args": ["compose", "down"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

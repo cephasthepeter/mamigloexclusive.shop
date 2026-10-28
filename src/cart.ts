@@ -18,7 +18,7 @@ export function loadCart(): CartItem[] {
       Number.isInteger(item?.quantity) &&
       item.quantity > 0 &&
       item.quantity <= 99,
-    )
+    ).map((item) => ({ ...item, quantity: Math.min(item.quantity, 20) }))
   } catch {
     return []
   }

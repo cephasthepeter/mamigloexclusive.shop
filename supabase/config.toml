@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.upload-product-image]
 verify_jwt = false
+
+[functions.cloudinary-media]
+verify_jwt = false

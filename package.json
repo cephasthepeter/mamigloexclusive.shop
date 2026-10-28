@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "dev:web": "vite",
-    "build": "node scripts/generate-sitemap.mjs && tsc -b && vite build",
+    "build": "node scripts/generate-sitemap.mjs && tsc -b && vite build && node scripts/prerender-journal.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
