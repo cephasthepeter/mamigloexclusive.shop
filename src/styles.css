@@ -173,11 +173,12 @@ h1, h2, h3, p { margin-top: 0; }
 .video-hero .hero-copy h1 { color: #fbf8f1; font-size: clamp(44px, 5vw, 68px); }
 .video-hero .hero-subtitle { max-width: 470px; color: #f0ede6; }
 .video-hero .button-quiet { color: #fffaf0; }
-.hero-video-controls { display: flex; align-items: center; gap: 7px; position: absolute; z-index: 4; right: 34px; bottom: 25px; }
-.hero-playback-toggle, .hero-sound-toggle { height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(255,255,255,.52); background: rgba(15,14,12,.25); color: #fff; cursor: pointer; backdrop-filter: blur(6px); transition: background .2s ease, border-color .2s ease; }
+.hero-video-controls { display: flex; align-items: center; gap: 7px; position: absolute; z-index: 5; right: 34px; bottom: 25px; }
+.hero-playback-toggle, .hero-sound-toggle { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(255,255,255,.52); background: rgba(15,14,12,.25); color: #fff; cursor: pointer; backdrop-filter: blur(6px); transition: background .2s ease, border-color .2s ease; touch-action: manipulation; }
 .hero-playback-toggle { min-width: 82px; padding: 0 11px; font-size: 9px; letter-spacing: .09em; text-transform: uppercase; }
 .hero-sound-toggle { width: 36px; padding: 0; }
 .hero-playback-toggle:hover, .hero-sound-toggle:hover { border-color: #d3b77f; background: rgba(15,14,12,.58); }
+.hero-video-retry { min-height: 48px; display: inline-flex; align-items: center; gap: 9px; position: absolute; z-index: 4; left: 50%; top: 50%; transform: translate(-50%, -50%); border: 1px solid #fff9; padding: 0 17px; background: #171614c9; color: #fff; cursor: pointer; }
 .hero-slide-count { position: absolute; z-index: 4; right: 132px; bottom: 37px; color: #f5f0e5; font: 12px var(--serif); letter-spacing: .12em; }
 .hero-loading-indicator, .sr-only { width: 1px; height: 1px; position: absolute; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; clip-path: inset(50%); }
 .editorial-strip { min-height: 61px; display: flex; align-items: center; justify-content: center; gap: clamp(18px, 4vw, 62px); border-bottom: 1px solid #eeece8; color: #706c63; font-size: 8px; letter-spacing: .19em; }
@@ -292,8 +293,15 @@ h1, h2, h3, p { margin-top: 0; }
 .shop-page .product-card { color: #20201d; }
 .product-detail-layout { display: grid; grid-template-columns: 1.05fr .95fr; gap: clamp(35px, 8vw, 110px); }
 .product-detail-media { min-width: 0; }
-.product-detail-visual { min-height: 500px; max-height: 680px; position: relative; overflow: hidden; background: #ece9e2; }
-.product-detail-visual img { height: 100%; position: absolute; inset: 0; object-fit: cover; }
+.product-detail-visual { min-height: 500px; max-height: 680px; position: relative; overflow: hidden; background: #ece9e2; touch-action: pan-y; outline-offset: 3px; }
+.product-detail-visual img.product-detail-image { width: 100%; height: 100%; position: absolute; inset: 0; object-fit: cover; animation: product-gallery-enter .24s cubic-bezier(.2,.7,.2,1) both; }
+.product-detail-visual.slide-previous img.product-detail-image { animation-name: product-gallery-enter-previous; }
+@keyframes product-gallery-enter { from { opacity: .7; transform: translateX(3%); } to { opacity: 1; transform: translateX(0); } }
+@keyframes product-gallery-enter-previous { from { opacity: .7; transform: translateX(-3%); } to { opacity: 1; transform: translateX(0); } }
+.product-gallery-arrow { width: 44px; height: 44px; display: grid; place-items: center; position: absolute; z-index: 2; top: 50%; transform: translateY(-50%); border: 1px solid #fff9; background: #17161480; color: #fff; cursor: pointer; }
+.product-gallery-arrow.previous { left: 12px; }
+.product-gallery-arrow.next { right: 12px; }
+.product-gallery-count { position: absolute; z-index: 2; right: 12px; bottom: 12px; padding: 7px 10px; background: #171614b8; color: #fff; font-size: 10px; }
 .product-gallery { display: flex; gap: 9px; margin-top: 10px; overflow-x: auto; }
 .product-gallery button { width: 62px; height: 70px; flex: 0 0 auto; position: relative; overflow: hidden; border: 1px solid #dedbd3; padding: 0; background: #ece9e2; cursor: pointer; }
 .product-gallery button.selected { border-color: #9a7845; box-shadow: inset 0 0 0 1px #9a7845; }

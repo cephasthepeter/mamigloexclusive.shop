@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AdminEligibilityCheckError, AdminNotAuthorizedError, getAdminEligibility, isAdminEmail, normalizeEmail, signInAdministrator, supabase } from './supabase'
+import { AdminEligibilityCheckError, AdminEmailNotVerifiedError, AdminNotAuthorizedError, getAdminEligibility, isAdminEmail, normalizeEmail, signInAdministrator, supabase } from './supabase'
 import { adminRedirectForState, checkoutValidationError, pageFromPath } from './App'
 import { storeApi } from './api'
 
@@ -45,7 +45,7 @@ describe('admin allowlist checks', () => {
 
   it('returns the active session only after the database authorizes the admin', async () => {
     vi.spyOn(supabase.auth, 'signInWithPassword').mockResolvedValue({
-      data: { user: { email: 'admin@example.com' }, session: { access_token: 'test-session-token' } },
+      data: { user: { email: 'admin@example.com', email_confirmed_at: '2026-01-01T00:00:00Z' }, session: { access_token: 'test-session-token' } },
       error: null,
     } as never)
     vi.spyOn(supabase, 'rpc').mockResolvedValue({ data: true, error: null } as never)
@@ -59,13 +59,24 @@ describe('admin allowlist checks', () => {
 
   it('signs out an authenticated user who is not authorized as an admin', async () => {
     vi.spyOn(supabase.auth, 'signInWithPassword').mockResolvedValue({
-      data: { user: { email: 'customer@example.com' }, session: { access_token: 'test-session-token' } },
+      data: { user: { email: 'customer@example.com', email_confirmed_at: '2026-01-01T00:00:00Z' }, session: { access_token: 'test-session-token' } },
       error: null,
     } as never)
     vi.spyOn(supabase, 'rpc').mockResolvedValue({ data: false, error: null } as never)
     const signOut = vi.spyOn(supabase.auth, 'signOut').mockResolvedValue({ error: null } as never)
 
     await expect(signInAdministrator('customer@example.com', 'test-password')).rejects.toBeInstanceOf(AdminNotAuthorizedError)
+    expect(signOut).toHaveBeenCalledOnce()
+  })
+
+  it('signs out an allowlisted account until its email is confirmed', async () => {
+    vi.spyOn(supabase.auth, 'signInWithPassword').mockResolvedValue({
+      data: { user: { email: 'admin@example.com' }, session: { access_token: 'test-session-token' } },
+      error: null,
+    } as never)
+    const signOut = vi.spyOn(supabase.auth, 'signOut').mockResolvedValue({ error: null } as never)
+
+    await expect(signInAdministrator('admin@example.com', 'test-password')).rejects.toBeInstanceOf(AdminEmailNotVerifiedError)
     expect(signOut).toHaveBeenCalledOnce()
   })
 
@@ -139,7 +150,7 @@ describe('administrator routes', () => {
 
   it('sends guests to login and verified administrators to the dashboard', () => {
     expect(adminRedirectForState('admin', 'guest')).toBe('admin-login')
-    expect(adminRedirectForState('admin-login', 'admin')).toBe('admin')
+    expect(adminRedirectForState('admin-login', 'admin')).toBeNull()
   })
 
   it('restores an authorized session on refresh without redirecting away from the dashboard', () => {
@@ -154,6 +165,8 @@ describe('administrator routes', () => {
     expect(adminRedirectForState('admin', 'customer')).toBeNull()
     expect(adminRedirectForState('admin-login', 'loading')).toBeNull()
     expect(adminRedirectForState('admin-login', 'error')).toBeNull()
+    expect(adminRedirectForState('admin', 'unverified')).toBe('admin-login')
+    expect(adminRedirectForState('admin-login', 'unverified')).toBeNull()
   })
 
   it('recognizes the journal homepage and individual article routes', () => {

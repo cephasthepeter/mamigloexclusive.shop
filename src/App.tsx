@@ -41,11 +41,38 @@ export function pageFromPath(path: string): Page {
 
 export function adminRedirectForState(
   currentPage: 'admin' | 'admin-login',
-  authorizationState: 'loading' | 'guest' | 'customer' | 'admin' | 'error',
+  authorizationState: 'loading' | 'guest' | 'customer' | 'unverified' | 'admin' | 'error',
 ): 'admin' | 'admin-login' | null {
   if (authorizationState === 'guest' && currentPage === 'admin') return 'admin-login'
-  if (authorizationState === 'admin' && currentPage === 'admin-login') return 'admin'
+  if (authorizationState === 'unverified' && currentPage === 'admin') return 'admin-login'
   return null
+}
+
+const checkoutReturnKey = 'mamigloexclusive.checkout-return'
+const checkoutDraftKey = 'mamigloexclusive.checkout-draft'
+
+function readCheckoutDraft(): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(sessionStorage.getItem(checkoutDraftKey) || '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+  } catch {
+    return {}
+  }
+}
+
+function checkoutDetailsFromDraft(draft: Record<string, string>): CustomerDetails | null {
+  if (!draft.fullName || !draft.phone || !draft.address || !draft.state || !draft.city || !draft.deliveryMethod) return null
+  return {
+    fullName: draft.fullName,
+    phone: draft.phone,
+    email: draft.email || '',
+    address: draft.address,
+    state: draft.state,
+    city: draft.city,
+    deliveryMethod: draft.deliveryMethod,
+    instructions: draft.instructions || '',
+  }
 }
 
 export function checkoutValidationError(customer: CustomerDetails, items: CartItem[]) {
@@ -112,6 +139,9 @@ function App() {
   const [order, setOrder] = useState<StoreOrder | null>(null)
   const [checkoutAddress, setCheckoutAddress] = useState<CustomerAddressInput | null>(null)
   const [checkoutError, setCheckoutError] = useState('')
+  const [checkoutNotice, setCheckoutNotice] = useState(() => sessionStorage.getItem(checkoutReturnKey) === '1')
+
+  const [checkoutAccess, setCheckoutAccess] = useState<'checking' | 'allowed'>('checking')
   const [sort, setSort] = useState('featured')
   const [minPrice, setMinPrice] = useState('')
   const [maxPrice, setMaxPrice] = useState('')
@@ -126,6 +156,24 @@ function App() {
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
+
+  useEffect(() => {
+    if (page !== 'checkout') return
+    let active = true
+    setCheckoutAccess('checking')
+    void supabase.auth.getUser().then(({ data, error }) => {
+      if (!active) return
+      if (error || !data.user) {
+        sessionStorage.setItem(checkoutReturnKey, '1')
+        setCheckoutNotice(true)
+        navigate('login', '', true)
+        return
+      }
+      setCheckoutNotice(false)
+      setCheckoutAccess('allowed')
+    })
+    return () => { active = false }
+  }, [page])
 
   useEffect(() => {
     if (page !== 'journal-article' || !journalSlug) return
@@ -314,6 +362,7 @@ function App() {
   }, [journalArticle, page])
 
   function navigate(next: Page, nextCategory: Category | '' = '', replace = false) {
+    if (next === 'checkout') setCheckoutAccess('checking')
     const path = next === 'home' ? '/' : next === 'admin-login' ? '/admin/login' : `/${next}`
     const query = next === 'shop' && nextCategory ? `?category=${encodeURIComponent(nextCategory)}` : ''
     if (replace) history.replaceState({}, '', `${path}${query}`)
@@ -572,10 +621,17 @@ function App() {
     return { productMatches, categoryMatches }
   }, [categoryList, products, searchQuery])
 
-  function beginCheckout() {
+  async function beginCheckout() {
     if (!cart.length) return
     setCartOpen(false)
     setOrder(null)
+    const { data, error } = await supabase.auth.getUser()
+    if (error || !data.user) {
+      sessionStorage.setItem(checkoutReturnKey, '1')
+      setCheckoutNotice(true)
+      navigate('login')
+      return
+    }
     navigate('checkout')
   }
 
@@ -604,11 +660,27 @@ function App() {
       return
     }
     try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError || !authData.user) {
+        sessionStorage.setItem(checkoutReturnKey, '1')
+        setCheckoutNotice(true)
+        navigate('login')
+        return
+      }
       const { order: newOrder } = await storeApi.createOrder(customer, cart, paymentMethod)
       setOrder(newOrder)
       setCart([])
+      sessionStorage.removeItem(checkoutDraftKey)
+      sessionStorage.removeItem(`${checkoutDraftKey}-step`)
+      sessionStorage.removeItem(`${checkoutDraftKey}-payment`)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        sessionStorage.setItem(checkoutReturnKey, '1')
+        setCheckoutNotice(true)
+        navigate('login')
+        return
+      }
       setCheckoutError(error instanceof ApiError
         ? error.message
         : 'We could not submit your order. Please try again.')
@@ -780,11 +852,11 @@ function App() {
       {['delivery', 'returns', 'privacy', 'terms'].includes(page) && <PolicyPage kind={page as 'delivery' | 'returns' | 'privacy' | 'terms'} />}
       {page === 'notfound' && <NotFoundPage onHome={() => navigate('home')} />}
       {page === 'checkout' && <main className="content-page checkout-page">
-        {!order ? <CheckoutForm cart={cart} products={products} deliveryFeeNGN={deliveryFeeNGN} error={checkoutError} initialAddress={checkoutAddress} onSubmit={submitCheckout} onBack={() => navigate('shop')} /> : (
+        {checkoutAccess !== 'allowed' ? <div className="loading-state" role="status">Checking your account…</div> : !order ? <CheckoutForm cart={cart} products={products} deliveryFeeNGN={deliveryFeeNGN} error={checkoutError} initialAddress={checkoutAddress} onSubmit={submitCheckout} onBack={() => navigate('shop')} /> : (
           <OrderPending order={order} message={orderWhatsAppMessage(order)} onShop={() => navigate('shop')} />
         )}
       </main>}
-      {page === 'login' && <CustomerAccount initialMode="sign-in" products={products} cartItemCount={itemCount} onAddToCart={addToCart} onOpenProduct={openProduct} onUseAddress={(address) => { setCheckoutAddress(address); navigate('checkout') }} onOpenCart={() => setCartOpen(true)} onNavigate={(target) => {
+      {page === 'login' && <CustomerAccount initialMode="sign-in" checkoutRequired={checkoutNotice} products={products} cartItemCount={itemCount} onAddToCart={addToCart} onOpenProduct={openProduct} onUseAddress={(address) => { setCheckoutAddress(address); navigate('checkout') }} onOpenCart={() => setCartOpen(true)} onNavigate={(target) => {
         if (target === 'register') navigate('register')
         if (target === 'home') navigate('home')
         if (target === 'shop') navigate('shop')
@@ -793,7 +865,7 @@ function App() {
         if (target === 'returns') navigate('returns')
         if (target === 'account') navigate('account')
       }} />}
-      {page === 'register' && <CustomerAccount initialMode="sign-up" products={products} cartItemCount={itemCount} onAddToCart={addToCart} onOpenProduct={openProduct} onUseAddress={(address) => { setCheckoutAddress(address); navigate('checkout') }} onOpenCart={() => setCartOpen(true)} onNavigate={(target) => {
+      {page === 'register' && <CustomerAccount initialMode="sign-up" checkoutRequired={checkoutNotice} products={products} cartItemCount={itemCount} onAddToCart={addToCart} onOpenProduct={openProduct} onUseAddress={(address) => { setCheckoutAddress(address); navigate('checkout') }} onOpenCart={() => setCartOpen(true)} onNavigate={(target) => {
         if (target === 'login') navigate('login')
         if (target === 'home') navigate('home')
         if (target === 'shop') navigate('shop')
@@ -825,7 +897,7 @@ function AdminRoute({ currentPage, onNavigate }: {
   currentPage: 'admin' | 'admin-login'
   onNavigate: (page: Page, category?: Category | '', replace?: boolean) => void
 }) {
-  const [authorizationState, setAuthorizationState] = useState<'loading' | 'guest' | 'customer' | 'admin' | 'error'>('loading')
+  const [authorizationState, setAuthorizationState] = useState<'loading' | 'guest' | 'customer' | 'unverified' | 'admin' | 'error'>('loading')
   const [authorizationError, setAuthorizationError] = useState('')
 
   useEffect(() => {
@@ -833,10 +905,14 @@ function AdminRoute({ currentPage, onNavigate }: {
     let authEventReceived = false
     let checkId = 0
 
-    async function checkSession(sessionEmail: string, sessionToken: string) {
+    async function checkSession(sessionEmail: string, sessionToken: string, emailConfirmed: boolean) {
       const currentCheck = ++checkId
       if (!sessionEmail || !sessionToken) {
         if (active) setAuthorizationState('guest')
+        return
+      }
+      if (!emailConfirmed) {
+        if (active && currentCheck === checkId) setAuthorizationState('unverified')
         return
       }
       try {
@@ -854,7 +930,7 @@ function AdminRoute({ currentPage, onNavigate }: {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       authEventReceived = true
-      void checkSession(session?.user.email || '', session?.access_token || '')
+      void checkSession(session?.user.email || '', session?.access_token || '', Boolean(session?.user.email_confirmed_at))
     })
 
     void supabase.auth.getSession().then(({ data, error }) => {
@@ -864,7 +940,7 @@ function AdminRoute({ currentPage, onNavigate }: {
         setAuthorizationState('error')
         return
       }
-      void checkSession(data.session?.user.email || '', data.session?.access_token || '')
+      void checkSession(data.session?.user.email || '', data.session?.access_token || '', Boolean(data.session?.user.email_confirmed_at))
     })
 
     return () => {
@@ -881,7 +957,8 @@ function AdminRoute({ currentPage, onNavigate }: {
   if (!supabaseConfigured) return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Administrator access</h1><p>Admin sign-in is unavailable until the Supabase project URL, publishable key, and authorised administrator account are configured.</p></main>
   if (authorizationState === 'loading') return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Checking administrator access.</h1><p>Verifying your secure session and permission status…</p></main>
   if (authorizationState === 'error') return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Access could not be verified.</h1><p>{authorizationError}</p></main>
-  if (authorizationState === 'customer') return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Access denied.</h1><p>This account is not authorised to manage the store.</p></main>
+  if (currentPage === 'admin' && authorizationState === 'customer') return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Approval required.</h1><p>Your email is verified, but this account is not on the administrator allowlist. Ask an existing administrator to approve access. Signup and email confirmation do not grant dashboard permissions.</p></main>
+  if (currentPage === 'admin-login' && authorizationState === 'admin') return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Administrator access confirmed.</h1><p>Your email is verified and your account is on the approved administrator list.</p><button type="button" className="button button-dark" onClick={() => onNavigate('admin', '', true)}>Go to Admin Dashboard <ArrowRight size={16} /></button></main>
   if (currentPage === 'admin' && authorizationState === 'guest') return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Opening administrator sign in.</h1></main>
 
   return <AdminDashboard />
@@ -1016,13 +1093,38 @@ function ProductDetailPage({ product, onBack, onAdd }: {
   const [color, setColor] = useState(product.colors[0] || '')
   const [size, setSize] = useState(product.sizes?.[0] || '')
   const [quantity, setQuantity] = useState(1)
-  const images = product.imageUrls?.length ? product.imageUrls : [product.imageUrl]
-  const [selectedImage, setSelectedImage] = useState(images[0])
+  const images = [...new Set((product.imageUrls?.length ? product.imageUrls : [product.imageUrl]).filter(Boolean))]
+  const [selectedImageIndex, setSelectedImageIndex] = useState(0)
+  const [slideDirection, setSlideDirection] = useState<'next' | 'previous'>('next')
+  const touchStart = useRef<{ x: number; y: number } | null>(null)
+  useEffect(() => { setSelectedImageIndex(0) }, [product.id])
+  function showImage(index: number) {
+    if (images.length < 2) return
+    const nextIndex = (index + images.length) % images.length
+    setSlideDirection(index >= selectedImageIndex ? 'next' : 'previous')
+    setSelectedImageIndex(nextIndex)
+  }
+  function handleGalleryKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.target instanceof HTMLElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName)) return
+    if (event.key === 'ArrowLeft') { event.preventDefault(); showImage(selectedImageIndex - 1) }
+    if (event.key === 'ArrowRight') { event.preventDefault(); showImage(selectedImageIndex + 1) }
+  }
+  const selectedImage = images[selectedImageIndex] || product.imageUrl
   const selectedImageAlt = product.imageMedia?.find((media) => media.url === selectedImage)?.altText || product.name
   return <main className="content-page product-page">
     <button className="back-link" onClick={onBack}><ArrowLeft size={15} /> {product.category}</button>
     <div className="product-detail-layout">
-      <div className="product-detail-media"><div className="product-detail-visual"><img fetchPriority="high" src={productImage(selectedImage, 1600)} alt={product.demo ? `${product.name} — demo product photo placeholder` : selectedImageAlt} />{product.demo && <span className="product-demo-label">BUSINESS PHOTO PLACEHOLDER</span>}</div>{images.length > 1 && <div className="product-gallery" aria-label="Product images">{images.map((image, index) => <button className={selectedImage === image ? 'selected' : ''} key={`${image}-${index}`} onClick={() => setSelectedImage(image)} aria-label={`Show product image ${index + 1}`}><img loading="lazy" src={productImage(image, 320)} alt="" /></button>)}</div>}{Boolean(product.videoMedia?.length) && <div className="product-detail-videos" aria-label="Product demonstration videos">{product.videoMedia?.map((media) => <video key={media.id} src={cloudinaryVideoUrl(media.url, 1200)} controls muted playsInline preload="metadata" aria-label={media.altText || `${product.name} demonstration video`} />)}</div>}</div>
+      <div className="product-detail-media"><div className={`product-detail-visual slide-${slideDirection}`} role="region" aria-label="Product image gallery" tabIndex={0} onKeyDown={handleGalleryKeyDown} onTouchStart={(event) => { touchStart.current = { x: event.touches[0].clientX, y: event.touches[0].clientY } }} onTouchEnd={(event) => {
+        if (!touchStart.current || images.length < 2) return
+        const deltaX = event.changedTouches[0].clientX - touchStart.current.x
+        const deltaY = event.changedTouches[0].clientY - touchStart.current.y
+        if (Math.abs(deltaX) > 40 && Math.abs(deltaX) > Math.abs(deltaY)) showImage(selectedImageIndex + (deltaX < 0 ? 1 : -1))
+        touchStart.current = null
+      }}>
+        <img key={`${product.id}-${selectedImageIndex}`} className="product-detail-image" fetchPriority="high" src={productImage(selectedImage, 1600)} alt={product.demo ? `${product.name} — demo product photo placeholder` : selectedImageAlt} />
+        {product.demo && <span className="product-demo-label">BUSINESS PHOTO PLACEHOLDER</span>}
+        {images.length > 1 && <><button type="button" className="product-gallery-arrow previous" aria-label="Previous product image" onClick={() => showImage(selectedImageIndex - 1)}><ArrowLeft size={18} /></button><button type="button" className="product-gallery-arrow next" aria-label="Next product image" onClick={() => showImage(selectedImageIndex + 1)}><ArrowRight size={18} /></button><span className="product-gallery-count" aria-live="polite">{selectedImageIndex + 1} / {images.length}</span></>}
+      </div>{images.length > 1 && <div className="product-gallery" aria-label="Product image thumbnails">{images.map((image, index) => <button type="button" className={selectedImageIndex === index ? 'selected' : ''} key={`${image}-${index}`} onClick={() => showImage(index)} aria-current={selectedImageIndex === index ? 'true' : undefined} aria-label={`Show product image ${index + 1}`}><img loading="lazy" src={productImage(image, 320)} alt="" /></button>)}</div>}{Boolean(product.videoMedia?.length) && <div className="product-detail-videos" aria-label="Product demonstration videos">{product.videoMedia?.map((media) => <video key={media.id} src={cloudinaryVideoUrl(media.url, 1200)} controls muted playsInline preload="metadata" aria-label={media.altText || `${product.name} demonstration video`} />)}</div>}</div>
       <section className="product-detail-copy"><p className="eyebrow">{product.category.toUpperCase()}</p><h1>{product.name}</h1><p className="product-detail-sku">REF. {product.sku}</p><p className="product-detail-price">{formatNGN(product.salePriceNGN ?? product.priceNGN)}{product.salePriceNGN && <del>{formatNGN(product.priceNGN)}</del>}</p><p className="product-detail-description">{product.description}</p>
         <div className="variation-row"><strong>Colour</strong><div className="variation-options">{product.colors.map((value) => <button className={color === value ? 'selected' : ''} key={value} onClick={() => setColor(value)}>{value}</button>)}</div></div>
         {Boolean(product.sizes?.length) && <div className="variation-row"><strong>Size</strong><div className="variation-options">{product.sizes?.map((value) => <button className={size === value ? 'selected' : ''} key={value} onClick={() => setSize(value)}>{value}</button>)}</div></div>}
@@ -1060,9 +1162,10 @@ function CartDrawer({ cart, products, deliveryFeeNGN, onClose, onUpdate, onRemov
 function CheckoutForm({ cart, products, deliveryFeeNGN, error, initialAddress, onSubmit, onBack }: {
   cart: CartItem[]; products: Product[]; deliveryFeeNGN: number; error: string; initialAddress?: CustomerAddressInput | null; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onBack: () => void
 }) {
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('opay_transfer')
-  const [checkoutStep, setCheckoutStep] = useState<'details' | 'payment'>('details')
-  const [deliveryDetails, setDeliveryDetails] = useState<CustomerDetails | null>(null)
+  const draft = readCheckoutDraft()
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(() => sessionStorage.getItem(`${checkoutDraftKey}-payment`) === 'cash_on_delivery' ? 'cash_on_delivery' : 'opay_transfer')
+  const [checkoutStep, setCheckoutStep] = useState<'details' | 'payment'>(() => sessionStorage.getItem(`${checkoutDraftKey}-step`) === 'payment' ? 'payment' : 'details')
+  const [deliveryDetails, setDeliveryDetails] = useState<CustomerDetails | null>(() => checkoutDetailsFromDraft(draft))
   const [detailsError, setDetailsError] = useState('')
   const total = subtotal(cart, products)
   if (cart.length === 0) return <EmptyState title="Your bag is empty." text="Add a piece to your bag before checkout." action="Browse the collection" onAction={onBack} />
@@ -1086,9 +1189,23 @@ function CheckoutForm({ cart, products, deliveryFeeNGN, error, initialAddress, o
       return
     }
     setDetailsError('')
+    const draftValues = Object.fromEntries(new FormData(event.currentTarget).entries())
+    sessionStorage.setItem(checkoutDraftKey, JSON.stringify(Object.fromEntries(Object.entries(draftValues).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))))
     setDeliveryDetails(customer)
     setCheckoutStep('payment')
+    sessionStorage.setItem(`${checkoutDraftKey}-step`, 'payment')
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  function setStep(step: 'details' | 'payment') {
+    setCheckoutStep(step)
+    sessionStorage.setItem(`${checkoutDraftKey}-step`, step)
+  }
+
+  function saveDraft(event: FormEvent<HTMLFormElement>) {
+    const values = Object.fromEntries(new FormData(event.currentTarget).entries())
+    const stringValues = Object.fromEntries(Object.entries(values).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    sessionStorage.setItem(checkoutDraftKey, JSON.stringify(stringValues))
   }
 
   function submitCheckoutStep(event: FormEvent<HTMLFormElement>) {
@@ -1108,33 +1225,33 @@ function CheckoutForm({ cart, products, deliveryFeeNGN, error, initialAddress, o
       <p className="eyebrow">{checkoutStep === 'details' ? 'DELIVERY DETAILS' : 'PAYMENT'}</p>
       <h1>{checkoutStep === 'details' ? "Let's get your order started." : 'Choose how to pay.'}</h1>
       <p className="checkout-helper">{checkoutStep === 'details' ? "We'll confirm your order and delivery details with you directly." : 'Choose a payment method. Your order remains pending until our team confirms it.'}</p>
-      <form className="checkout-form" onSubmit={submitCheckoutStep}>
+      <form className="checkout-form" onSubmit={submitCheckoutStep} onInput={saveDraft}>
         <div hidden={checkoutStep !== 'details'}>
-          <div className="form-two"><Field label="Full name" name="fullName" required autoComplete="name" maxLength={120} defaultValue={initialAddress?.recipientName} /><Field label="Phone number" name="phone" type="tel" required autoComplete="tel" placeholder="+234" maxLength={20} defaultValue={initialAddress?.phone} /><Field label="Email address" name="email" type="email" autoComplete="email" placeholder="Optional" maxLength={254} /><Field label="State" name="state" required autoComplete="address-level1" maxLength={100} defaultValue={initialAddress?.state} /></div>
-          <Field label="City / town" name="city" required autoComplete="address-level2" maxLength={100} defaultValue={initialAddress?.city} /><Field label="Delivery address" name="address" required autoComplete="street-address" maxLength={400} defaultValue={[initialAddress?.streetAddress, initialAddress?.additionalDirections].filter(Boolean).join(', ')} />
-          <label className="field"><span>Preferred delivery method</span><select name="deliveryMethod" required defaultValue=""><option value="" disabled>Select a preference</option><option>Courier delivery</option><option>Pickup / collection</option><option>Discuss with me</option></select></label>
-          <label className="field"><span>Additional instructions <small>Optional</small></span><textarea name="instructions" rows={3} maxLength={1000} placeholder="Anything we should know about your order?" /></label>
+          <div className="form-two"><Field label="Full name" name="fullName" required autoComplete="name" maxLength={120} defaultValue={draft.fullName || initialAddress?.recipientName} /><Field label="Phone number" name="phone" type="tel" required autoComplete="tel" placeholder="+234" maxLength={20} defaultValue={draft.phone || initialAddress?.phone} /><Field label="Email address" name="email" type="email" autoComplete="email" placeholder="Optional" maxLength={254} defaultValue={draft.email} /><Field label="State" name="state" required autoComplete="address-level1" maxLength={100} defaultValue={draft.state || initialAddress?.state} /></div>
+          <Field label="City / town" name="city" required autoComplete="address-level2" maxLength={100} defaultValue={draft.city || initialAddress?.city} /><Field label="Delivery address" name="address" required autoComplete="street-address" maxLength={400} defaultValue={draft.address || [initialAddress?.streetAddress, initialAddress?.additionalDirections].filter(Boolean).join(', ')} />
+          <label className="field"><span>Preferred delivery method</span><select name="deliveryMethod" required defaultValue={draft.deliveryMethod || ''}><option value="" disabled>Select a preference</option><option>Courier delivery</option><option>Pickup / collection</option><option>Discuss with me</option></select></label>
+          <label className="field"><span>Additional instructions <small>Optional</small></span><textarea name="instructions" rows={3} maxLength={1000} defaultValue={draft.instructions} placeholder="Anything we should know about your order?" /></label>
           {detailsError && <ErrorNotice message={detailsError} />}
           <button className="button button-dark full-width" type="submit">Continue to payment <ArrowRight size={16} /></button>
         </div>
 
         <div hidden={checkoutStep !== 'payment'}>
-          {deliveryDetails && <div className="payment-delivery-summary"><div><span>Delivering to</span><strong>{deliveryDetails.fullName}</strong><small>{deliveryDetails.address}, {deliveryDetails.city}, {deliveryDetails.state}</small></div><button type="button" className="text-link" onClick={() => setCheckoutStep('details')}><Pencil size={13} /> Edit</button></div>}
+          {deliveryDetails && <div className="payment-delivery-summary"><div><span>Delivering to</span><strong>{deliveryDetails.fullName}</strong><small>{deliveryDetails.address}, {deliveryDetails.city}, {deliveryDetails.state}</small></div><button type="button" className="text-link" onClick={() => setStep('details')}><Pencil size={13} /> Edit</button></div>}
           <fieldset className="payment-method-fieldset">
             <legend>Choose a payment method</legend>
             <label className={`payment-method-option${paymentMethod === 'opay_transfer' ? ' selected' : ''}`}>
-              <input type="radio" name="paymentMethod" value="opay_transfer" checked={paymentMethod === 'opay_transfer'} onChange={() => setPaymentMethod('opay_transfer')} />
+              <input type="radio" name="paymentMethod" value="opay_transfer" checked={paymentMethod === 'opay_transfer'} onChange={() => { setPaymentMethod('opay_transfer'); sessionStorage.setItem(`${checkoutDraftKey}-payment`, 'opay_transfer') }} />
               <Building2 size={18} />
               <span><strong>OPay bank transfer</strong><small>Bank details and your order reference appear after order creation. Payment is confirmed manually by our team.</small></span>
             </label>
             <label className={`payment-method-option${paymentMethod === 'cash_on_delivery' ? ' selected' : ''}`}>
-              <input type="radio" name="paymentMethod" value="cash_on_delivery" checked={paymentMethod === 'cash_on_delivery'} onChange={() => setPaymentMethod('cash_on_delivery')} />
+              <input type="radio" name="paymentMethod" value="cash_on_delivery" checked={paymentMethod === 'cash_on_delivery'} onChange={() => { setPaymentMethod('cash_on_delivery'); sessionStorage.setItem(`${checkoutDraftKey}-payment`, 'cash_on_delivery') }} />
               <Truck size={18} />
               <span><strong>Cash on delivery</strong><small>Pay when your order is delivered. Availability will be confirmed by our team.</small></span>
             </label>
           </fieldset>
           {error && <ErrorNotice message={error} />}
-          <div className="checkout-payment-actions"><button className="button button-outline" type="button" onClick={() => setCheckoutStep('details')}><ArrowLeft size={15} /> Back</button><button className="button button-dark" type="submit">{paymentMethod === 'opay_transfer' ? 'Place order and view payment details' : 'Place cash-on-delivery order'} <ArrowRight size={16} /></button></div>
+          <div className="checkout-payment-actions"><button className="button button-outline" type="button" onClick={() => setStep('details')}><ArrowLeft size={15} /> Back</button><button className="button button-dark" type="submit">{paymentMethod === 'opay_transfer' ? 'Place order and view payment details' : 'Place cash-on-delivery order'} <ArrowRight size={16} /></button></div>
           <p className="form-legal">Placing this order creates a pending request. This site does not process or automatically verify online payments.</p>
         </div>
       </form>

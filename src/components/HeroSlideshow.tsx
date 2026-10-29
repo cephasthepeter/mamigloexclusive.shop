@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Pause, Play, Volume2, VolumeX } from 'lucide-react'
 import { defaultHeroSettings, getPublicHeroContent, type HeroCampaign, type HeroSettings } from '../hero'
 import { getHeroOverlayContent, nextPlayableHeroIndex } from '../hero-presentation'
+import { cloudinaryImageUrl, cloudinaryVideoUrl } from '../cloudinary'
 
 interface HeroSlideshowProps {
   onNavigate: (path: string) => void
@@ -18,6 +19,8 @@ export function HeroSlideshow({ onNavigate }: HeroSlideshowProps) {
   const [reducedMotion, setReducedMotion] = useState(false)
   const [userPaused, setUserPaused] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(false)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [playbackBlocked, setPlaybackBlocked] = useState(false)
   const [tabHidden, setTabHidden] = useState(false)
   const [mobileViewport, setMobileViewport] = useState(false)
   const [videoUnavailable, setVideoUnavailable] = useState(false)
@@ -163,6 +166,7 @@ export function HeroSlideshow({ onNavigate }: HeroSlideshowProps) {
         activeIndexRef.current = index
         setActiveSlot(nextSlot)
         setActiveIndex(index)
+        setIsPlaying(!outgoingVideo || !incomingVideo.paused)
         setIncomingIndex(null)
         setTransitioning(false)
         transitionRef.current = false
@@ -195,6 +199,21 @@ export function HeroSlideshow({ onNavigate }: HeroSlideshowProps) {
     videoRefs.current.forEach((video) => { if (video) video.muted = !nextEnabled })
   }
 
+  function togglePlayback() {
+    if (isPlaying) {
+      setUserPaused(true)
+      return
+    }
+    setUserPaused(false)
+    const activeVideo = videoRefs.current[activeSlotRef.current]
+    if (!activeVideo) return
+    activeVideo.muted = !soundEnabled
+    void activeVideo.play().then(() => {
+      setPlaybackBlocked(false)
+      setVideoUnavailable(false)
+    }).catch(() => setPlaybackBlocked(true))
+  }
+
   function scheduleDisplayTimer(index: number) {
     clearDisplayTimer()
     if (motionPaused || validCampaigns.length < 2 || index !== activeIndexRef.current) return
@@ -208,9 +227,10 @@ export function HeroSlideshow({ onNavigate }: HeroSlideshowProps) {
     if (slot === activeSlotRef.current && index === activeIndexRef.current) {
       void video.play().then(() => {
         startedRef.current = true
+        setPlaybackBlocked(false)
         setVideoUnavailable(false)
         scheduleDisplayTimer(index)
-      }).catch(() => handleVideoError(index))
+      }).catch(() => setPlaybackBlocked(true))
       return
     }
     if (startedRef.current && pendingIndexRef.current === index && slot === 1 - activeSlotRef.current) {
@@ -271,26 +291,30 @@ export function HeroSlideshow({ onNavigate }: HeroSlideshowProps) {
       if (slot < 0) return null
       const isActive = slot === activeSlot
       const isIncoming = transitioning && index === incomingIndex
-      const src = mobileViewport && campaign.mobileVideoUrl ? campaign.mobileVideoUrl : campaign.videoUrl
+      const source = mobileViewport && campaign.mobileVideoUrl ? campaign.mobileVideoUrl : campaign.videoUrl
+      const src = cloudinaryVideoUrl(source, mobileViewport ? 960 : 1600)
       return <video
         key={`${slot}-${campaign.id}`}
         ref={(element) => { videoRefs.current[slot] = element }}
         className={`hero-video-layer ${isActive ? 'is-active' : ''} ${isActive && transitioning ? 'is-outgoing' : ''} ${isIncoming ? 'is-incoming' : ''}`}
         style={{ transitionDuration: `${settings.crossfadeMs}ms` }}
         src={src}
-        poster={campaign.posterUrl || undefined}
+        poster={cloudinaryImageUrl(campaign.posterUrl || settings.fallbackPosterUrl || '', mobileViewport ? 960 : 1600) || undefined}
+        autoPlay={isActive && !motionPaused}
         muted={!soundEnabled}
         playsInline
         preload={isActive || index === incomingIndexForLayer ? 'auto' : 'none'}
         loop={validCampaigns.length === 1}
         aria-hidden="true"
         onCanPlay={() => handleVideoReady(slot, index)}
+        onPlay={() => { if (slot === activeSlotRef.current && index === activeIndexRef.current) { setIsPlaying(true); setPlaybackBlocked(false) } }}
+        onPause={() => { if (slot === activeSlotRef.current && index === activeIndexRef.current) setIsPlaying(false) }}
         onEnded={() => { if (slot === activeSlotRef.current) requestNextTransition() }}
         onError={() => handleVideoError(index)}
       />
     })}
     {!showVideo && (visiblePoster
-      ? <img className="hero-static-fallback" src={visiblePoster} alt="" />
+      ? <img className="hero-static-fallback" src={visiblePoster} alt={activePresentation?.posterAltText || currentCampaign?.posterAltText || 'Mamigloexclusive campaign'} />
       : <div className="hero-static-fallback" aria-hidden="true" />)}
     <div className="hero-video-overlay" />
       {campaigns.length > 1 && <div className="hero-slide-count" aria-live="polite">{Math.min(activeIndex + 1, campaigns.length).toString().padStart(2, '0')} / {campaigns.length.toString().padStart(2, '0')}</div>}
@@ -298,11 +322,12 @@ export function HeroSlideshow({ onNavigate }: HeroSlideshowProps) {
         <button className="hero-sound-toggle" type="button" aria-label={soundEnabled ? 'Mute hero video' : 'Unmute hero video'} onClick={toggleSound}>
           {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
         </button>
-        <button className="hero-playback-toggle" type="button" aria-label={userPaused ? 'Resume hero slideshow' : 'Pause hero slideshow'} onClick={() => setUserPaused((paused) => !paused)}>
-          {userPaused ? <Play size={14} /> : <Pause size={14} />}
-          <span>{userPaused ? 'Play' : 'Pause'}</span>
+        <button className="hero-playback-toggle" type="button" aria-label={isPlaying ? 'Pause hero slideshow' : 'Play hero slideshow'} onClick={togglePlayback}>
+          {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+          <span>{isPlaying ? 'Pause' : playbackBlocked ? 'Play video' : 'Play'}</span>
         </button>
       </div>}
+      {playbackBlocked && showVideo && <button className="hero-video-retry" type="button" onClick={togglePlayback}><Play size={17} /> Play campaign video</button>}
     </div>
     {hasOverlay && <div className="hero-copy">
       {overlay.title && <h1>{overlay.title}</h1>}
@@ -313,6 +338,6 @@ export function HeroSlideshow({ onNavigate }: HeroSlideshowProps) {
       </div>}
     </div>}
     {!loadComplete && <span className="hero-loading-indicator" role="status">Loading campaign</span>}
-    {settingsError && <span className="sr-only">Showing the campaign poster or neutral fallback because hero settings are unavailable.</span>}
+    {(settingsError || videoUnavailable) && <span className="sr-only">{videoUnavailable ? 'The campaign video is unavailable; showing its poster fallback.' : 'Showing the campaign poster or neutral fallback because hero settings are unavailable.'}</span>}
   </section>
 }

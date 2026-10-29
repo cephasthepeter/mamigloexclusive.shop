@@ -54,15 +54,15 @@ Deno.serve(async (request) => {
   const admin = createClient(projectUrl, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   })
-  let customerUserId: string | null = null
   const accessToken = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1]
-  if (accessToken?.split('.').length === 3) {
-    const { data: customerAuth, error: customerAuthError } = await admin.auth.getUser(accessToken)
-    if (customerAuthError || !customerAuth.user) {
-      return json(401, { error: 'Your customer session has expired. Sign in again or continue as a guest.' })
-    }
-    customerUserId = customerAuth.user.id
+  if (!accessToken || accessToken.split('.').length !== 3) {
+    return json(401, { error: 'Sign in or create an account before placing your order.' })
   }
+  const { data: customerAuth, error: customerAuthError } = await admin.auth.getUser(accessToken)
+  if (customerAuthError || !customerAuth.user) {
+    return json(401, { error: 'Your customer session has expired. Sign in again before placing your order.' })
+  }
+  const customerUserId = customerAuth.user.id
   const ipFingerprint = await fingerprint(forwardedFor, rateLimitSecret)
   const { data: allowed, error: limitError } = await admin.rpc('consume_checkout_rate_limit', {
     p_fingerprint: ipFingerprint,

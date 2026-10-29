@@ -30,7 +30,7 @@ describe('Cloudinary image delivery', () => {
 
   it('optimizes Cloudinary video delivery without changing legacy video URLs', () => {
     expect(cloudinaryVideoUrl('https://res.cloudinary.com/demo/video/upload/v1/hero.mp4', 900))
-      .toBe('https://res.cloudinary.com/demo/video/upload/q_auto:good,c_limit,w_900/v1/hero.mp4')
+      .toBe('https://res.cloudinary.com/demo/video/upload/f_mp4,q_auto:good,c_limit,w_900/v1/hero.mp4')
     expect(cloudinaryVideoUrl('https://legacy.example/hero.mp4')).toBe('https://legacy.example/hero.mp4')
   })
 })

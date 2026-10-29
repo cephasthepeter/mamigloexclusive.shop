@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'r
 import { Archive, ArrowRight, ArrowUp, Bell, BookOpen, Boxes, Camera, Check, ClipboardList, ImagePlus, LayoutDashboard, LogOut, Menu, Package, Pencil, Plus, RotateCcw, Search, Settings, ShieldCheck, Tag, Trash2, Users, Video, X } from 'lucide-react'
 import { ApiError, storeApi } from '../api'
 import { formatNGN, storeConfig } from '../config'
-import { AdminEligibilityCheckError, AdminNotAuthorizedError, getAdminEligibility, normalizeEmail, signInAdministrator, supabase, supabaseConfigured } from '../supabase'
+import { AdminEligibilityCheckError, AdminEmailNotVerifiedError, AdminNotAuthorizedError, getAdminEligibility, normalizeEmail, signInAdministrator, supabase, supabaseConfigured } from '../supabase'
 import type { AdminAccessEntry, Category, OrderStatus, PaymentStatus, Product, StoreOrder } from '../types'
 import { categories } from '../types'
 import { buildRecentSalesSeries, summarizeDashboardData } from '../dashboard-summary'
@@ -42,6 +42,8 @@ export function AdminDashboard() {
   const avatarInputRef = useRef<HTMLInputElement>(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [adminAuthMode, setAdminAuthMode] = useState<'sign-in' | 'sign-up'>('sign-in')
+  const [confirmationPendingEmail, setConfirmationPendingEmail] = useState('')
   const [products, setProducts] = useState<Product[]>([])
   const [orphanMediaIds, setOrphanMediaIds] = useState<string[]>([])
   const [managedCategories, setManagedCategories] = useState<string[]>([...categories])
@@ -65,7 +67,7 @@ export function AdminDashboard() {
   const [removedMediaIds, setRemovedMediaIds] = useState<string[]>([])
   const mediaUploadController = useRef<AbortController | null>(null)
   const [loading, setLoading] = useState(false)
-  const [authorizationState, setAuthorizationState] = useState<'loading' | 'guest' | 'customer' | 'admin' | 'error'>('loading')
+  const [authorizationState, setAuthorizationState] = useState<'loading' | 'guest' | 'customer' | 'unverified' | 'admin' | 'error'>('loading')
   const [activeView, setActiveView] = useState<AdminView>('overview')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [globalSearch, setGlobalSearch] = useState('')
@@ -114,6 +116,32 @@ export function AdminDashboard() {
     }
   }
 
+  async function recheckAdminApproval() {
+    setAuthorizationState('loading')
+    setError('')
+    try {
+      const { data, error: userError } = await supabase.auth.getUser()
+      if (userError) throw userError
+      if (!data.user?.email || !data.user.email_confirmed_at) {
+        setConfirmationPendingEmail(data.user?.email || email.trim())
+        setAuthorizationState(data.user ? 'unverified' : 'guest')
+        return
+      }
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError) throw sessionError
+      if (!sessionData.session?.access_token) {
+        setAuthorizationState('guest')
+        return
+      }
+      setAccountEmail(data.user.email)
+      setToken(sessionData.session.access_token)
+      setAuthorizationState(await getAdminEligibility(data.user.email) ? 'admin' : 'customer')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Administrator access could not be verified.')
+      setAuthorizationState('error')
+    }
+  }
+
   async function changeAdminAvatar(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0]
     event.currentTarget.value = ''
@@ -148,7 +176,7 @@ export function AdminDashboard() {
     let authEventReceived = false
     let checkId = 0
 
-    async function checkSession(nextEmail: string, nextToken: string, nextAvatarUrl: string) {
+    async function checkSession(nextEmail: string, nextToken: string, nextAvatarUrl: string, emailConfirmed: boolean) {
       const currentCheck = ++checkId
       setToken(nextToken)
       setAccountEmail(nextEmail)
@@ -157,6 +185,12 @@ export function AdminDashboard() {
         setAuthorizationState('guest')
         return
       }
+      if (!emailConfirmed) {
+        setAuthorizationState('unverified')
+        setConfirmationPendingEmail(nextEmail)
+        return
+      }
+      setConfirmationPendingEmail('')
       try {
         const eligible = await getAdminEligibility(nextEmail)
         if (active && currentCheck === checkId) setAuthorizationState(eligible ? 'admin' : 'customer')
@@ -170,7 +204,7 @@ export function AdminDashboard() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       authEventReceived = true
-      void checkSession(session?.user.email || '', session?.access_token || '', getAdminAvatarUrl(session?.user))
+      void checkSession(session?.user.email || '', session?.access_token || '', getAdminAvatarUrl(session?.user), Boolean(session?.user.email_confirmed_at))
     })
     void supabase.auth.getSession().then(({ data, error: sessionError }) => {
       if (!active || authEventReceived) return
@@ -179,7 +213,7 @@ export function AdminDashboard() {
         setAuthorizationState('error')
         return
       }
-      void checkSession(data.session?.user.email || '', data.session?.access_token || '', getAdminAvatarUrl(data.session?.user))
+      void checkSession(data.session?.user.email || '', data.session?.access_token || '', getAdminAvatarUrl(data.session?.user), Boolean(data.session?.user.email_confirmed_at))
     })
     return () => {
       active = false
@@ -227,7 +261,77 @@ export function AdminDashboard() {
         setToken('')
         setAccountEmail('')
       }
+      if (reason instanceof AdminEmailNotVerifiedError) {
+        setAuthorizationState('unverified')
+        setConfirmationPendingEmail(email.trim())
+      }
+      if (reason instanceof Error && /email not confirmed|confirm your email/i.test(reason.message)) {
+        setAuthorizationState('unverified')
+        setConfirmationPendingEmail(email.trim())
+      }
       if (reason instanceof AdminEligibilityCheckError) setAuthorizationState('error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function signUpAdministrator(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError('')
+    setNotice('')
+    setBusy(true)
+    try {
+      const trimmedEmail = email.trim()
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) throw new Error('Enter a valid email address.')
+      if (password.length < 8) throw new Error('Use at least 8 characters for your password.')
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: trimmedEmail,
+        password,
+        options: { emailRedirectTo: `${window.location.origin}/admin/login` },
+      })
+      if (signUpError) throw signUpError
+      setPassword('')
+      setConfirmationPendingEmail(trimmedEmail)
+      if (data.session && data.user?.email) {
+        setNotice('Account created. Administrator access is being checked against the approved list.')
+        setAccountEmail(data.user.email)
+        setToken(data.session.access_token)
+        if (!data.user.email_confirmed_at) {
+          setAuthorizationState('unverified')
+        } else {
+          const eligible = await getAdminEligibility(data.user.email)
+          setAuthorizationState(eligible ? 'admin' : 'customer')
+        }
+      } else {
+        setNotice('Check your email and confirm the address. An existing administrator must separately approve access before you can open the dashboard.')
+        setAuthorizationState('guest')
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Administrator account signup could not be completed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function resendAdminConfirmation() {
+    const targetEmail = confirmationPendingEmail || email.trim()
+    if (!targetEmail) {
+      setError('Enter the email address that needs confirmation.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const { error: resendError } = await supabase.auth.resend({
+        type: 'signup',
+        email: targetEmail,
+        options: { emailRedirectTo: `${window.location.origin}/admin/login` },
+      })
+      if (resendError) throw resendError
+      setNotice('A new email confirmation link has been sent.')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The confirmation email could not be resent.')
     } finally {
       setBusy(false)
     }
@@ -1070,17 +1174,21 @@ export function AdminDashboard() {
 
   if (authorizationState === 'error') return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Access could not be verified.</h1>{error && <div className="error-notice" role="alert">{error}</div>}</main>
 
-  if (authorizationState === 'customer') return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Access denied.</h1><p>This account is not currently authorised to manage the store. Please sign in with an approved administrator account.</p>{error && <div className="error-notice" role="alert">{error}</div>}</main>
+  if (authorizationState === 'customer') return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Approval required.</h1><p>Your email is verified, but this account is not on the administrator allowlist. Ask an existing administrator to approve access. Signup and email confirmation do not grant dashboard permissions.</p>{error && <div className="error-notice" role="alert">{error}</div>}<button type="button" className="button button-dark" onClick={() => void recheckAdminApproval()}>Check approval status <ArrowRight size={16} /></button><button type="button" className="button button-outline" onClick={() => void signOut()}><LogOut size={15} /> Sign out</button></main>
+
+  if (authorizationState === 'unverified') return <main className="content-page admin-page"><p className="eyebrow">STORE ADMINISTRATION</p><h1>Confirm your email.</h1><p>Administrator access can only be checked after you confirm {confirmationPendingEmail || accountEmail}. Confirmation does not itself approve administrator access.</p>{notice && <p className="success-message" role="status">{notice}</p>}{error && <div className="error-notice" role="alert">{error}</div>}<button type="button" className="button button-dark" disabled={busy} onClick={() => void resendAdminConfirmation()}>{busy ? 'Sending…' : 'Resend confirmation email'} <ArrowRight size={16} /></button><button type="button" className="text-link" onClick={() => void signOut()}>Sign out</button></main>
 
   if (authorizationState === 'guest' || !token) return <main className="content-page admin-page">
-    <p className="eyebrow">STORE ADMINISTRATION</p><h1>Welcome back.</h1>
-    <p>Sign in with an authorised business account to manage products and order requests.</p>
+    <p className="eyebrow">STORE ADMINISTRATION</p><h1>{adminAuthMode === 'sign-in' ? 'Welcome back.' : 'Request administrator account.'}</h1>
+    <p>{adminAuthMode === 'sign-in' ? 'Sign in with an authorised business account to manage products and order requests.' : 'Create an account, confirm your email, then ask an existing administrator to approve dashboard access.'}</p>
     {error && <div className="error-notice" role="alert">{error}</div>}{notice && <p className="success-message" role="status">{notice}</p>}{(removedMediaIds.length > 0 || orphanMediaIds.length > 0) && <button type="button" className="button button-outline" onClick={() => void retryMediaCleanup()}>Retry cleanup ({new Set([...removedMediaIds, ...orphanMediaIds]).size})</button>}
-    <form className="admin-signin" onSubmit={signIn}>
+    <form className="admin-signin" onSubmit={adminAuthMode === 'sign-in' ? signIn : signUpAdministrator}>
       <label className="field"><span>Email address</span><input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-      <label className="field"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
-      <button className="button button-dark" disabled={busy}>{busy ? 'Signing in…' : 'Sign in securely'} <ArrowRight size={16} /></button>
-      <button type="button" className="text-link" onClick={requestPasswordReset}>Reset password</button>
+      <label className="field"><span>Password</span><input type="password" autoComplete={adminAuthMode === 'sign-in' ? 'current-password' : 'new-password'} minLength={adminAuthMode === 'sign-up' ? 8 : undefined} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+      <button className="button button-dark" disabled={busy}>{busy ? (adminAuthMode === 'sign-in' ? 'Signing in…' : 'Creating account…') : adminAuthMode === 'sign-in' ? 'Sign in securely' : 'Create account'} <ArrowRight size={16} /></button>
+      {adminAuthMode === 'sign-in' && <button type="button" className="text-link" onClick={requestPasswordReset}>Reset password</button>}
+      {confirmationPendingEmail && <button type="button" className="text-link" disabled={busy} onClick={() => void resendAdminConfirmation()}>Resend confirmation email</button>}
+      <button type="button" className="text-link" onClick={() => { setAdminAuthMode((mode) => mode === 'sign-in' ? 'sign-up' : 'sign-in'); setError(''); setNotice('') }}>{adminAuthMode === 'sign-in' ? 'Create an account' : 'Back to sign in'}</button>
     </form>
   </main>
 

@@ -8,6 +8,7 @@ import { CustomerAccountDashboard } from './CustomerAccountDashboard'
 type AuthMode = 'sign-in' | 'sign-up'
 interface CustomerAccountProps {
   initialMode?: AuthMode
+  checkoutRequired?: boolean
   products: Product[]
   cartItemCount: number
   onAddToCart: (product: Product) => void
@@ -31,7 +32,7 @@ function passwordStrength(value: string) {
   return { label: 'Excellent', score: 4, checks }
 }
 
-export function CustomerAccount({ initialMode = 'sign-in', products, cartItemCount, onAddToCart, onNavigate, onOpenProduct, onUseAddress, onOpenCart }: CustomerAccountProps) {
+export function CustomerAccount({ initialMode = 'sign-in', checkoutRequired = false, products, cartItemCount, onAddToCart, onNavigate, onOpenProduct, onUseAddress, onOpenCart }: CustomerAccountProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -51,6 +52,12 @@ export function CustomerAccount({ initialMode = 'sign-in', products, cartItemCou
   useEffect(() => {
     setMode(initialMode)
   }, [initialMode])
+
+  useEffect(() => {
+    if (!signedInEmail || sessionStorage.getItem('mamigloexclusive.checkout-return') !== '1') return
+    sessionStorage.removeItem('mamigloexclusive.checkout-return')
+    onNavigate?.('checkout')
+  }, [onNavigate, signedInEmail])
 
   useEffect(() => {
     let active = true
@@ -147,7 +154,9 @@ export function CustomerAccount({ initialMode = 'sign-in', products, cartItemCou
         if (signUpError) throw signUpError
         if (data.session) {
           setSignedInEmail(data.user?.email || trimmedEmail)
-          onNavigate?.('account')
+          const returningToCheckout = sessionStorage.getItem('mamigloexclusive.checkout-return') === '1'
+          if (returningToCheckout) sessionStorage.removeItem('mamigloexclusive.checkout-return')
+          onNavigate?.(returningToCheckout ? 'checkout' : 'account')
         }
         else setNotice('Check your email to confirm your account, then sign in here.')
         setPassword('')
@@ -158,7 +167,9 @@ export function CustomerAccount({ initialMode = 'sign-in', products, cartItemCou
         const { data, error: signInError } = await supabase.auth.signInWithPassword({ email: trimmedEmail, password })
         if (signInError) throw signInError
         setSignedInEmail(data.user.email || trimmedEmail)
-        onNavigate?.('account')
+        const returningToCheckout = sessionStorage.getItem('mamigloexclusive.checkout-return') === '1'
+        if (returningToCheckout) sessionStorage.removeItem('mamigloexclusive.checkout-return')
+        onNavigate?.(returningToCheckout ? 'checkout' : 'account')
         setPassword('')
       }
     } catch (reason) {
@@ -232,6 +243,8 @@ export function CustomerAccount({ initialMode = 'sign-in', products, cartItemCou
           <h2>{mode === 'sign-in' ? 'Welcome Back' : 'Create Your Account'}</h2>
           <p>{mode === 'sign-in' ? 'Sign in to continue your shopping experience.' : 'Join Mamigloexclusive for a seamless shopping experience.'}</p>
         </div>
+
+        {checkoutRequired && <p className="success-message" role="status">Create an account or sign in to complete your purchase. Your bag and checkout details will be here when you return.</p>}
 
         {error && <div className="error-notice" role="alert">{error}</div>}
         {notice && <p className="success-message" role="status">{notice}</p>}

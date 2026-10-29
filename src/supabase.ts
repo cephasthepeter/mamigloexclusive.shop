@@ -42,6 +42,13 @@ export class AdminNotAuthorizedError extends Error {
   }
 }
 
+export class AdminEmailNotVerifiedError extends Error {
+  constructor() {
+    super('Confirm your email address before signing in to administrator access.')
+    this.name = 'AdminEmailNotVerifiedError'
+  }
+}
+
 export async function getAdminEligibility(email?: string | null) {
   const normalized = normalizeEmail(email)
   if (!normalized || !supabaseConfigured) return false
@@ -70,6 +77,11 @@ export async function signInAdministrator(email: string, password: string) {
   if (error) throw error
   if (!data.user?.email || !data.session?.access_token) {
     throw new Error('Administrator sign-in did not return an active session.')
+  }
+  if (!data.user.email_confirmed_at) {
+    const { error: signOutError } = await supabase.auth.signOut()
+    if (signOutError) console.warn('Could not clear the unconfirmed admin session.', signOutError.message)
+    throw new AdminEmailNotVerifiedError()
   }
 
   const eligible = await getAdminEligibility(data.user.email)

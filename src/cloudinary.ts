@@ -14,5 +14,5 @@ export function cloudinaryVideoUrl(url: string, width = 1920) {
   if (!match) return url
 
   const safeWidth = Math.max(1, Math.round(width))
-  return `${match[1]}q_auto:good,c_limit,w_${safeWidth}/${match[2]}`
+  return `${match[1]}f_mp4,q_auto:good,c_limit,w_${safeWidth}/${match[2]}`
 }

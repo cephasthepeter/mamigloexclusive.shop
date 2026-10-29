@@ -1,5 +1,5 @@
 begin;
-select plan(57);
+select plan(60);
 
 select ok(
   position('where id is not null' in lower(pg_get_functiondef('public.admin_publish_hero_content()'::regprocedure))) > 0,
@@ -21,6 +21,10 @@ select ok(
 select ok(
   position('auth.uid' in coalesce((select qual from pg_policies where schemaname = 'public' and tablename = 'order_items' and policyname = 'order_items_customer_read'), '')) > 0,
   'customers can read order items only through their own orders'
+);
+select ok(
+  position('email_confirmed_at' in lower(pg_get_functiondef('private.is_store_admin()'::regprocedure))) > 0,
+  'administrator database policies require a confirmed email'
 );
 select ok(
   not has_table_privilege('anon', 'public.admin_allowlist', 'select'),
@@ -99,6 +103,10 @@ select ok(
   'trusted checkout can create orders with a selected payment method'
 );
 select ok(
+  position('p_customer_user_id is null' in lower(pg_get_functiondef('public.create_order_with_payment_method(jsonb,jsonb,uuid,uuid,text)'::regprocedure))) > 0,
+  'trusted checkout cannot create an order without an authenticated customer identity'
+);
+select ok(
   position('ready for dispatch' in lower(pg_get_constraintdef((select oid from pg_constraint where conname = 'orders_fulfilment_status_check' and conrelid = 'public.orders'::regclass)))) > 0,
   'fulfilment constraints allow the ready-for-dispatch stage'
 );
@@ -134,7 +142,13 @@ select ok((select position('auth.uid' in coalesce(with_check, '')) > 0 from pg_p
 select ok((select position('auth.uid' in coalesce(qual, '')) > 0 from pg_policies where schemaname = 'public' and tablename = 'customer_wishlist' and policyname = 'customer_wishlist_owner_all'), 'wishlist reads and deletes are owner-scoped');
 select ok((select position('auth.uid' in coalesce(with_check, '')) > 0 from pg_policies where schemaname = 'public' and tablename = 'customer_wishlist' and policyname = 'customer_wishlist_owner_all'), 'wishlist inserts and updates are owner-scoped');
 
-insert into public.admin_allowlist (email) values ('admin@example.com'), ('second-admin@example.com') on conflict do nothing;
+insert into public.admin_allowlist (email) values ('admin@example.com'), ('second-admin@example.com'), ('unconfirmed@example.com') on conflict do nothing;
+insert into auth.users (id, aud, role, email, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
+values
+  ('11111111-1111-4111-8111-111111111111', 'authenticated', 'authenticated', 'unauthorised@example.com', now(), '{}'::jsonb, '{}'::jsonb, now(), now()),
+  ('22222222-2222-4222-8222-222222222222', 'authenticated', 'authenticated', 'admin@example.com', now(), '{}'::jsonb, '{}'::jsonb, now(), now()),
+  ('33333333-3333-4333-8333-333333333333', 'authenticated', 'authenticated', 'unconfirmed@example.com', null, '{}'::jsonb, '{}'::jsonb, now(), now())
+on conflict (id) do update set email = excluded.email, email_confirmed_at = excluded.email_confirmed_at;
 
 set local role anon;
 select ok((select count(*) > 0 from public.categories), 'public visitors can read categories');
@@ -152,9 +166,11 @@ select throws_ok($$select public.remove_store_admin('second-admin@example.com')$
 select throws_ok($$select public.admin_update_order_payment_status(gen_random_uuid(), 'Paid', 'unauthorised@example.com')$$, '42501', 'Administrator access is required.', 'a non-admin cannot mark an order paid');
 select is_empty($$select id from public.orders$$, 'signed-in non-admins cannot read customer orders');
 select is_empty($$update public.products set price_ngn = 1 returning id$$, 'signed-in non-admins cannot modify product rows');
+set local request.jwt.claims = '{"sub":"33333333-3333-4333-8333-333333333333","email":"unconfirmed@example.com"}';
+select is((select public.is_current_user_store_admin()), false, 'an allowlisted administrator must confirm their email first');
 set local request.jwt.claims = '{"sub":"22222222-2222-4222-8222-222222222222","email":"admin@example.com"}';
 select is((select public.is_current_user_store_admin()), true, 'an allowlisted admin passes the administrator check');
-select is((select count(*) from public.list_store_admins()), 2::bigint, 'an admin sees the allowlist entries and no other users');
+select is((select count(*) from public.list_store_admins()), 3::bigint, 'an admin sees the allowlist entries and no other users');
 select throws_ok($$select public.remove_store_admin('admin@example.com')$$, '22023', 'You cannot remove your own administrator access.', 'an admin cannot remove their own access');
 select is((select public.remove_store_admin('second-admin@example.com')), true, 'an admin can remove another allowlisted administrator');
 select throws_ok($$select public.remove_store_admin('admin@example.com')$$, '23514', 'The last administrator cannot be removed.', 'the last administrator cannot be removed');
